@@ -1,0 +1,50 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: cloud-pak-deployer-4.8.0-run-
+  namespace: default
+  labels:
+    tekton.dev/pipeline: cloud-pak-deployer
+spec:
+  params:
+    - name: namespace
+      value: cloud-pak-deployer
+    - name: storage-class
+      value: ocs-storagecluster-cephfs
+    - name: ocp-client-version
+      value: '4.12'
+    - name: cp4d-version
+      value: 4.8.0
+    - name: ibm-entitlement-key
+      value: 'false'
+    - name: db2-state
+      value: installed
+    - name: db2-size
+      value: small
+    - name: db2wh-state
+      value: removed
+    - name: dmc-state
+      value: installed
+    - name: watson-assistant-state
+      value: installed
+    - name: watson-assistant-size
+      value: small
+    - name: watsonx-data-state
+      value: installed
+    - name: wkc-state
+      value: installed
+    - name: wkc-size
+      value: small
+    - name: wkc-options-core-only
+      value: 'True'
+    - name: wkc-options-enable-data-quality
+      value: 'True'
+    - name: ws-state
+      value: installed
+    - name: ws-runtimes-state
+      value: installed
+  pipelineRef:
+    name: cloud-pak-deployer-4.8
+  serviceAccountName: pipeline
+  timeouts:
+    pipeline: 8h0m0s
