@@ -11,9 +11,6 @@ spec:
       value: main
   pipelineRef:
     name: apic-tekton
-  podTemplate:
-    securityContext:
-      fsGroup: 65532
   serviceAccountName: pipeline
   timeout: 8h0m0s
   workspaces:
