@@ -1,0 +1,43 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: trigger-template-datamon
+  namespace: datamon
+spec:
+  params:
+    - name: git-revision
+    - name: git-commit-message
+    - name: git-repo-url
+    - name: git-repo-name
+    - name: content-type
+    - name: pusher-name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: datamon-pipeline-
+      spec:
+        serviceAccountName: pipeline
+        params:
+          - name: APP_NAME
+            value: datamon
+          - name: GIT_REPO
+            value: $(tt.params.git-repo-url)
+          - name: GIT_REVISION
+            value: $(tt.params.git-revision)
+          - name: IMAGE_NAME
+            value: >-
+              image-registry.openshift-image-registry.svc:5000/datamon/datamon:latest
+          - name: PATH_CONTEXT
+            value: .
+        pipelineRef:
+          name: datamon-pipeline
+        workspaces:
+          - name: workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 500Mi
