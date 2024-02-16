@@ -1,0 +1,12 @@
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: mail-dashboard
+  namespace: development-mailserver
+spec:
+  to:
+    kind: Service
+    name: mailserver
+    weight: 100
+  port:
+    targetPort: http

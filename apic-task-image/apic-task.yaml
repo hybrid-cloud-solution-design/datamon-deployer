@@ -1,0 +1,47 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: create-api-in-apic
+spec:
+  params:
+    - name: apic-image
+      description: image used to execute this task
+      default: "image-registry.openshift-image-registry.svc:5000/datamon-test/apic-tekton"
+    - name: apic-mgmt-server
+      description: APIC api server url
+      default: "apic-dm-mgmt-platform-api-apic.apps.ocp4vmw2.sanfran.pbm.ihost.com"
+    - name: apic-porg-dev-owner-username
+      description: Portal org developer username
+    - name: apic-porg-dev-owner-password
+      description:  Portal org developer password      
+    - name: apic-porg-dev-name
+      description: Portal organization name
+      default: esg-development  
+    - name: apic-cat-dev-name
+      description: Portal organization catalog name
+      default: esg-portfolio-analysis    
+    - name: apigen-url
+      description: Url to apigen application
+      default: https://datamon.15nwk2ygtk89.eu-de.codeengine.appdomain.cloud/api/openapi-generator                
+    - name: service-url
+      description: Url to apigen application
+      default: https://datamon.15nwk2ygtk89.eu-de.codeengine.appdomain.cloud                
+  steps:
+    - name: apic-script
+      image: $(params.apic-image)
+      command: ["./apicscript.sh"]      
+      env:
+        - name: "APIC_MGMT_SERVER"
+          value: $(params.apic-mgmt-server)     
+        - name: "PORG_DEV_OWNER_USER"
+          value: $(params.apic-porg-dev-owner-username)     
+        - name: "PORG_DEV_OWNER_PWD"
+          value: $(params.apic-porg-dev-owner-password)  
+        - name: "PORG_DEV_NAME"
+          value: $(params.apic-porg-dev-name)     
+        - name: "CAT_DEV_NAME"
+          value: $(params.apic-cat-dev-name)                                       
+        - name: "APIGEN_URL"
+          value: $(params.apigen-url)   
+        - name: "SERVICE_URL"
+          value: $(params.service-url)             

@@ -1,0 +1,6 @@
+{
+  "type": "mail_server",
+  "title": "apic-mail",
+  "host": "mailserver.development-mailserver",
+  "port": 1025
+}
