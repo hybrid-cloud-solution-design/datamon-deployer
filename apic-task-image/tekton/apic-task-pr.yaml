@@ -1,0 +1,31 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: apic-tekton-
+  namespace: datamon
+spec:
+  params:
+    - name: GIT_REPO
+      value: 'https://github.com/hybrid-cloud-solution-design/datamon-deployer.git'
+    - name: GIT_REVISION
+      value: main
+  pipelineRef:
+    name: apic-tekton
+  podTemplate:
+    securityContext:
+      fsGroup: 65532
+  serviceAccountName: pipeline
+  timeout: 8h0m0s
+  workspaces:
+    - name: workspace
+      volumeClaimTemplate:
+        metadata:
+          creationTimestamp: null
+        spec:
+          accessModes:
+            - ReadWriteMany
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: ocs-storagecluster-cephfs
+          volumeMode: Filesystem

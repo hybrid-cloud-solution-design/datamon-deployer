@@ -32,7 +32,7 @@ Check Org and Owner at `Cloud Manager > Provider Organisations`
 Login to API Manager as pOrg owner
 
 - user: esgadmin 
-- pwd: (PORG_DEV_OWNER_PWD) eg `ESGAdmin!`
+- pwd: (PORG_DEV_OWNER_PWD) eg `passw0rd`
 
 <!-- Check `API Manager > Settings > Notifications`
 
@@ -56,7 +56,7 @@ Run `./apic-catalog-dev.sh`
 
 Login to API Manager as pOrg owner
 
-- user: (${PORG_DEV_OWNER_FN}.${PORG_DEV_OWNER_LN}@${CUSTOMER_NAME}.com) eg `dev.org-owner@tiger-bank.com`
+- user: (PORG_DEV_OWNER_USER)) eg `esgadmin`
 - pwd: (PORG_DEV_OWNER_PWD) eg `passw0rd`
 
 Check ESG Portfolio Analysis catalog created `API Manager > Manage`
@@ -72,7 +72,7 @@ Run `./apic-corg-dev.sh`
 
 Login to API Manager as pOrg owner
 
-- user: (${PORG_DEV_OWNER_FN}.${PORG_DEV_OWNER_LN}@${CUSTOMER_NAME}.com) eg `dev.org-owner@tiger-bank.com`
+- user: (PORG_DEV_OWNER_USER) eg `dev.org-owner@tiger-bank.com`
 - pwd: (PORG_DEV_OWNER_PWD) eg `passw0rd`
 
 Check cOrg catalog created `API Manager > Manage > Mortgages > Consumers`
