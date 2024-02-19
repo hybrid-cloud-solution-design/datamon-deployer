@@ -1655,10 +1655,38 @@ spec:
             cd apic-config
             echo "Install mail server"
             oc apply -R -f mail-server
-            echo "wait for mail server --timeout=1h"
-            oc wait --for=condition=available deployment/maildev -n development-mailserver --insecure-skip-tls-verify --timeout=1h 2>/dev/null
             echo "wait for apic mgment --timeout=1h"
-            oc wait --for=condition=available deployment -l app.kubernetes.io/name=juhu -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
+
+            i=0
+            while true
+            do
+              # Check to see if the deployment exists and apply patch if it does
+              oc get -n integration deployment -l app.kubernetes.io/name=juhu
+              if [ $? -ne 0 ] ; then
+                echo "Still waiting for apic deployment to exist"
+              else
+                echo "Deployment exists -ending wait loop"
+                break
+              fi
+
+              # Check to make sure the job hasn't completed
+              is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+                echo "$is_complete"
+                echo "$did_fail"
+                echo "Cloud Pak Deployer job is Complete"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '700' ]]; then
+                echo "Deployment apic not created within timeout limit"
+                break
+              fi
+            done
+
             echo "set path"
             cd .. 
             export PATH=$PATH:$(pwd)/apic-task-image
@@ -1703,10 +1731,42 @@ spec:
           value: | 
             cd application-setup
             ls -la
+            
             echo "create namespace"
             oc apply -f 00-namespace.yaml
+            
             echo "wait for APIC"
-            oc wait --for=condition=available deployment -l app.kubernetes.io/name=juhu -n integration --insecure-skip-tls-verify --timeout=8h 2>/dev/null
+            
+            i=0
+            while true
+            do
+              # Check to see if the deployment exists and apply patch if it does
+              oc get -n integration deployment -l app.kubernetes.io/name=juhu
+              if [ $? -ne 0 ] ; then
+                echo "Still waiting for APIC deployment to exist"
+              else
+                echo "Deployment exists -ending wait loop"
+                break
+              fi
+
+              # Check to make sure the job hasn't completed
+              is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+                echo "$is_complete"
+                echo "$did_fail"
+                echo "Cloud Pak Deployer job is Complete"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '700' ]]; then
+                echo "Deployment apic not created within timeout limit"
+                break
+              fi
+            done
+
             echo "get mgmt endpoint"
             export APIC_MGMT_SERVER=$(oc get route -l app.kubernetes.io/name=platform-api-endpoint -n $APIC_NAMESPACE -o jsonpath="{.items[].spec.host}")
             echo "Endpoint $APIC_MGMT_SERVER"
@@ -1721,7 +1781,38 @@ spec:
             oc apply -f el-route.yaml
 
             echo "configure minio secret - wait for minio deployment - 8h"
-            oc wait --for=condition=available deployment -l component=ibm-lh-minio -n cpd --insecure-skip-tls-verify --timeout=8h 2>/dev/null
+
+            i=0
+            while true
+            do
+              # Check to see if the deployment exists and apply patch if it does
+              oc get -n cpd deployment -l component=ibm-lh-minio
+              if [ $? -ne 0 ] ; then
+                echo "Still waiting for minio deployment to exist"
+              else
+                echo "Deployment exists -ending wait loop"
+                break
+              fi
+
+              # Check to make sure the job hasn't completed
+              is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+                echo "$is_complete"
+                echo "$did_fail"
+                echo "Cloud Pak Deployer job is Complete"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '700' ]]; then
+                echo "Deployment minio not created within timeout limit"
+                break
+              fi
+            done
+
+
             echo "deployment ready - create secret"
             export LH_S3_ACCESS_KEY=$(oc get secret "ibm-lh-minio-secret" -n cpd -o jsonpath="{.data.LH_S3_ACCESS_KEY}" | base64 -d)
             export LH_S3_SECRET_KEY=$(oc get secret "ibm-lh-minio-secret" -n cpd -o jsonpath="{.data.LH_S3_SECRET_KEY}" | base64 -d)
