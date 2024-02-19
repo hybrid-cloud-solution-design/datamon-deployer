@@ -1688,7 +1688,7 @@ spec:
             echo "Install apic task pipeline and run it"
             oc apply -f 00-namespace.yaml
             oc apply -f apic-task-pipeline.yaml
-            oc apply -f task-pr.yaml
+            oc create -f task-pr.yaml
     - name: install-application-pipeline
       taskRef:
         kind: Task

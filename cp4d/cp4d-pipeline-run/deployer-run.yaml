@@ -7,6 +7,8 @@ metadata:
     tekton.dev/pipeline: cloud-pak-deployer
 spec:
   params:
+    - name: GIT_REPO
+      value: https://github.com/hybrid-cloud-solution-design/datamon-deployer.git
     - name: namespace
       value: cloud-pak-deployer
     - name: storage-class
