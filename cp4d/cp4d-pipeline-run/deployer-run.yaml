@@ -48,3 +48,15 @@ spec:
   serviceAccountName: pipeline
   timeouts:
     pipeline: 8h0m0s
+  podTemplate:
+    securityContext:
+      fsGroup: 65532
+  workspaces:
+    - name: workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteMany
+          resources:
+            requests:
+              storage: 1Gi      

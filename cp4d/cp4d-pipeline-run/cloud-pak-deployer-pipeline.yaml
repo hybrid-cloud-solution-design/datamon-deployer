@@ -6,6 +6,10 @@ metadata:
   annotations:
 spec:
   params:
+    - name: GIT_REPO
+      type: string
+      description: Repository with setup files
+      default: https://github.com/hybrid-cloud-solution-design/datamon-deployer.git
     - name: namespace
       type: string
       description: Namespace for Cloud Pak Deployer deployment
@@ -925,11 +929,29 @@ spec:
 
             oc patch configmap/pipeline-output -p "{\"data\":{\"Status\":\"Pipeline run Successful\",\"CP4D-Console-Route\":\"${cpd_route}\",\"CP4D-Initial-Admin-Username\":\"admin\",\"CP4D-Initial-Admin-Password\":\"${initial_admin_password}\"}}"
   tasks:
+    - name: git-clone
+      params:
+        - name: url
+          value: $(params.GIT_REPO)
+        - name: revision
+          value: main
+        - name: refspec
+          value: ''
+        - name: deleteExisting
+          value: 'true'
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: workspace
     - name: add-namespace
       retries: 3
       taskRef:
         kind: Task
         name: ibm-pak
+      runAfter:
+        - git-clone        
       params:
         - name: SCRIPT
           value: |
@@ -1576,3 +1598,134 @@ spec:
               
               sleep 10
             done
+    - name: install-cp4i
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - git-clone
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+      params:
+        - name: SCRIPT
+          value: |
+            ls --la 
+            cd cp4i
+            echo "Install catalog soucres"
+            oc apply -R -f catalog-sources
+            echo "Install operators"
+            oc apply -R -f operators-install
+    - name: create-cp4i-instances
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - install-cp4i
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+      params:
+        - name: SCRIPT
+          value: |
+            ls --la 
+            cd cp4i
+            echo "wait for platform operator to become ready --timeout=1h"
+            oc wait --for=condition=available deployment/ibm-integration-platform-navigator-operator -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
+            echo "install platform ui"
+            cd instances-install
+            oc apply -f 00-platform-ui-instance.yaml
+            echo "wait for apic operator to become ready --timeout=1h"
+            oc wait --for=condition=available deployment/ ibm-apiconnect -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
+            echo "Install operators"
+            oc apply -f 01-apic-instance.yaml 
+    - name: configure-apic
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - create-cp4i-instances
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+      params:
+        - name: SCRIPT
+          value: |
+            ls --la 
+            cd apic-config
+            echo "Install mail server"
+            oc apply -R -f mail-server
+            echo "wait for mail server --timeout=1h"
+            oc wait --for=condition=available deployment/maildev -n development-mailserver --insecure-skip-tls-verify --timeout=1h 2>/dev/null
+            echo "wait for apic mgment --timeout=1h"
+            oc wait --for=condition=available deployment -l app.kubernetes.io/name=juhu -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
+            echo "set path"
+            cd .. 
+            export PATH=$PATH:$(pwd)/apic-task-image
+            echo "Install license"
+            apic --accept-license --live-help=false
+            cd apic-config/scripts
+            ls -la
+            ./apic-setup-notifications.sh
+            ./apic-user-registry-visiblility.sh
+            ./apic-porg-dev.sh
+            ./apic-catalog-dev.sh
+            ./apic-corg-dev.sh  
+    - name: install-apic-task-image
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - git-clone
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+      params:
+        - name: SCRIPT
+          value: | 
+            cd apic-task-image/tekton
+            ls -la
+            echo "Install apic task pipeline and run it"
+            oc apply -f 00-namespace.yaml
+            oc apply -f apic-task-pipeline.yaml
+            oc apply -f task-pr.yaml
+    - name: install-application-pipeline
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - install-apic-task-image
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+      params:
+        - name: SCRIPT
+          value: | 
+            cd application-setup
+            ls -la
+            echo "create namespace"
+            oc apply -f 00-namespace.yaml
+            echo "wait for APIC"
+            oc wait --for=condition=available deployment -l app.kubernetes.io/name=juhu -n integration --insecure-skip-tls-verify --timeout=8h 2>/dev/null
+            echo "get mgmt endpoint"
+            export APIC_MGMT_SERVER=$(oc get route -l app.kubernetes.io/name=platform-api-endpoint -n $APIC_NAMESPACE -o jsonpath="{.items[].spec.host}")
+            echo "Endpoint $APIC_MGMT_SERVER"
+            echo "fix pipeline:"
+            yq ".spec.tasks |= map(select(.name == \"create-api-in-apic\").params |=map(select(.name ==\"apic-mgmt-server\").value=\"$APIC_MGMT_SERVER\"))"" < app-pipeline.yaml > app-pipeline-new.yaml
+            cat app-pipeline-new.yaml
+            
+            oc apply -f ibm-pak.yaml
+            oc apply -f app-pipeline-new.yaml
+            oc apply -f trigger-template.yaml
+            oc apply -f event-listener.yaml
+            oc apply -f el-route.yaml
+
+            echo "configure minio secret - wait for minio deployment - 8h"
+            oc wait --for=condition=available deployment -l component=ibm-lh-minio -n cpd --insecure-skip-tls-verify --timeout=8h 2>/dev/null
+            echo "deployment ready - create secret"
+            export LH_S3_ACCESS_KEY=$(oc get secret "ibm-lh-minio-secret" -n cpd -o jsonpath="{.data.LH_S3_ACCESS_KEY}" | base64 -d)
+            export LH_S3_SECRET_KEY=$(oc get secret "ibm-lh-minio-secret" -n cpd -o jsonpath="{.data.LH_S3_SECRET_KEY}" | base64 -d)
+            oc create secret generic minio-config --from-literal=COS_ACCESS_KEY=$LH_S3_ACCESS_KEY --from-literal=COS_SECRET_KEY=$LH_S3_SECRET_KEY -n datamon
+
+  workspaces:
+    - name: workspace
