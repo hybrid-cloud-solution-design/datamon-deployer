@@ -1610,7 +1610,7 @@ spec:
       params:
         - name: SCRIPT
           value: |
-            ls --la 
+            ls -la 
             cd cp4i
             echo "Install catalog soucres"
             oc apply -R -f catalog-sources
@@ -1651,7 +1651,7 @@ spec:
       params:
         - name: SCRIPT
           value: |
-            ls --la 
+            ls -la 
             cd apic-config
             echo "Install mail server"
             oc apply -R -f mail-server
