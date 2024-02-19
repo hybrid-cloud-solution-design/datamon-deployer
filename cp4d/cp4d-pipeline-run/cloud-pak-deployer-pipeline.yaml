@@ -1628,7 +1628,7 @@ spec:
       params:
         - name: SCRIPT
           value: |
-            ls --la 
+            ls -la 
             cd cp4i
             echo "wait for platform operator to become ready --timeout=1h"
             oc wait --for=condition=available deployment/ibm-integration-platform-navigator-operator -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
@@ -1688,7 +1688,7 @@ spec:
             echo "Install apic task pipeline and run it"
             oc apply -f 00-namespace.yaml
             oc apply -f apic-task-pipeline.yaml
-            oc create -f task-pr.yaml
+            oc create -f apic-task-pr.yaml
     - name: install-application-pipeline
       taskRef:
         kind: Task
