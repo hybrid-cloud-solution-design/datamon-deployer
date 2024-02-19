@@ -1661,23 +1661,26 @@ spec:
             while true
             do
               # Check to see if the deployment exists and apply patch if it does
-              oc get -n integration deployment -l app.kubernetes.io/name=juhu
-              if [ $? -ne 0 ] ; then
-                echo "Still waiting for apic deployment to exist"
+              status=$(oc get deployments -n integration -l app.kubernetes.io/name=juhu -o 'jsonpath={..status.conditions[?(@.type=="Available")].status}')
+              echo "current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              # oc get -n integration deployment -l app.kubernetes.io/name=juhu
+              if [ -z "$status" ] || [ $status != "True" ] ; then
+                echo "Still waiting for APIC deployment to exist"
               else
                 echo "Deployment exists -ending wait loop"
                 break
               fi
 
               # Check to make sure the job hasn't completed
-              is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
-              did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
-              if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
-                echo "$is_complete"
-                echo "$did_fail"
-                echo "Cloud Pak Deployer job is Complete"
-                break
-              fi
+              # is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              # did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              #if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+              #  echo "$is_complete"
+              #  echo "$did_fail"
+              #  echo "Cloud Pak Deployer job is Complete"
+              #  break
+              #fi
 
               ((i++))
               sleep 60
@@ -1741,8 +1744,11 @@ spec:
             while true
             do
               # Check to see if the deployment exists and apply patch if it does
-              oc get -n integration deployment -l app.kubernetes.io/name=juhu
-              if [ $? -ne 0 ] ; then
+              status=$(oc get deployments -n integration -l app.kubernetes.io/name=juhu -o 'jsonpath={..status.conditions[?(@.type=="Available")].status}')
+              echo "current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              # oc get -n integration deployment -l app.kubernetes.io/name=juhu
+              if [ -z "$status" ] || [ $status != "True" ] ; then
                 echo "Still waiting for APIC deployment to exist"
               else
                 echo "Deployment exists -ending wait loop"
@@ -1750,14 +1756,14 @@ spec:
               fi
 
               # Check to make sure the job hasn't completed
-              is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
-              did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
-              if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
-                echo "$is_complete"
-                echo "$did_fail"
-                echo "Cloud Pak Deployer job is Complete"
-                break
-              fi
+              # is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              # did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              #if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+              #  echo "$is_complete"
+              #  echo "$did_fail"
+              #  echo "Cloud Pak Deployer job is Complete"
+              #  break
+              #fi
 
               ((i++))
               sleep 60
@@ -1785,9 +1791,11 @@ spec:
             i=0
             while true
             do
+              status=$(oc get deployments -n cpd -l component=ibm-lh-minio -o 'jsonpath={..status.conditions[?(@.type=="Available")].status}')
+              echo "current status: $status"
               # Check to see if the deployment exists and apply patch if it does
-              oc get -n cpd deployment -l component=ibm-lh-minio
-              if [ $? -ne 0 ] ; then
+              # oc get -n cpd deployment -l component=ibm-lh-minio
+              if [ -z "$status" ] || [ $status != "True" ] ; then
                 echo "Still waiting for minio deployment to exist"
               else
                 echo "Deployment exists -ending wait loop"
@@ -1795,14 +1803,14 @@ spec:
               fi
 
               # Check to make sure the job hasn't completed
-              is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
-              did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
-              if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
-                echo "$is_complete"
-                echo "$did_fail"
-                echo "Cloud Pak Deployer job is Complete"
-                break
-              fi
+              #is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              #did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              #if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+              #  echo "$is_complete"
+              #  echo "$did_fail"
+              #  echo "Cloud Pak Deployer job is Complete"
+              #  break
+              #fi
 
               ((i++))
               sleep 60
