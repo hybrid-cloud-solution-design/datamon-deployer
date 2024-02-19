@@ -1631,12 +1631,77 @@ spec:
             ls -la 
             cd cp4i
             echo "wait for platform operator to become ready --timeout=1h"
-            oc wait --for=condition=available deployment/ibm-integration-platform-navigator-operator -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
+            i=0
+            while true
+            do
+              # Check to see if the deployment exists and apply patch if it does
+              status=$(oc get deployment/ibm-integration-platform-navigator-operator -n integration -o 'jsonpath={..status.conditions[?(@.type=="Available")].status}')
+              echo "current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              # oc get -n integration deployment -l app.kubernetes.io/name=juhu
+              if [ -z "$status" ] || [ $status != "True" ] ; then
+                echo "Still waiting for platform-navigator deployment to exist"
+              else
+                echo "Deployment exists -ending wait loop"
+                break
+              fi
+
+              # Check to make sure the job hasn't completed
+              # is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              # did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              #if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+              #  echo "$is_complete"
+              #  echo "$did_fail"
+              #  echo "Cloud Pak Deployer job is Complete"
+              #  break
+              #fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '700' ]]; then
+                echo "Deployment apic not created within timeout limit"
+                break
+              fi
+            done
+
+            #oc wait --for=condition=available deployment/ibm-integration-platform-navigator-operator -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
             echo "install platform ui"
             cd instances-install
             oc apply -f 00-platform-ui-instance.yaml
             echo "wait for apic operator to become ready --timeout=1h"
-            oc wait --for=condition=available deployment/ ibm-apiconnect -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
+            i=0
+            while true
+            do
+              # Check to see if the deployment exists and apply patch if it does
+              status=$(oc get deployment/ibm-apiconnect -n integration -o 'jsonpath={..status.conditions[?(@.type=="Available")].status}')
+              echo "current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              # oc get -n integration deployment -l app.kubernetes.io/name=juhu
+              if [ -z "$status" ] || [ $status != "True" ] ; then
+                echo "Still waiting for ibm-apiconnect deployment to exist"
+              else
+                echo "Deployment exists -ending wait loop"
+                break
+              fi
+
+              # Check to make sure the job hasn't completed
+              # is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+              # did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+              #if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+              #  echo "$is_complete"
+              #  echo "$did_fail"
+              #  echo "Cloud Pak Deployer job is Complete"
+              #  break
+              #fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '700' ]]; then
+                echo "Deployment apic not created within timeout limit"
+                break
+              fi
+            done            
+            # oc wait --for=condition=available deployment/ ibm-apiconnect -n integration --insecure-skip-tls-verify --timeout=1h 2>/dev/null
             echo "Install operators"
             oc apply -f 01-apic-instance.yaml 
     - name: configure-apic
