@@ -1,0 +1,7 @@
+{
+    "mail_server_url": "https://api-manage-cfc083d4-platform-api-integration.apps.ocp-110000e92m-h3nf.cloud.techzone.ibm.com/api/orgs/5c69653d-37e2-48ed-97f3-225071cb748c/mail-servers/0070b0db-4e33-4a1d-9f12-eae26b5d3a14",
+    "email_sender": {
+        "name": "APIC Administrator",
+        "address": "admin@apiconnect.net"
+    }
+}

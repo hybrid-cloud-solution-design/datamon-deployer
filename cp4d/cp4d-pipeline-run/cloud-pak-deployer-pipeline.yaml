@@ -1763,7 +1763,7 @@ spec:
             cd apic-config/scripts
             ls -la
             ./apic-setup-notifications.sh
-            ./apic-user-registry-visiblility.sh
+            ./apic-user-registry-visibility.sh
             ./apic-porg-dev.sh
             ./apic-catalog-dev.sh
             ./apic-corg-dev.sh  
@@ -1810,6 +1810,7 @@ spec:
             do
               # Check to see if the deployment exists and apply patch if it does
               status=$(oc get deployments -n integration -l app.kubernetes.io/name=juhu -o 'jsonpath={..status.conditions[?(@.type=="Available")].status}')
+              
               echo "current status: $status"
               # Check to see if the deployment exists and apply patch if it does
               # oc get -n integration deployment -l app.kubernetes.io/name=juhu
@@ -1838,11 +1839,11 @@ spec:
               fi
             done
 
-            echo "get mgmt endpoint"
+            
             export APIC_MGMT_SERVER=$(oc get route -l app.kubernetes.io/name=platform-api-endpoint -n $APIC_NAMESPACE -o jsonpath="{.items[].spec.host}")
             echo "Endpoint $APIC_MGMT_SERVER"
             echo "fix pipeline:"
-            yq ".spec.tasks |= map(select(.name == \"create-api-in-apic\").params |=map(select(.name ==\"apic-mgmt-server\").value=\"$APIC_MGMT_SERVER\"))"" < app-pipeline.yaml > app-pipeline-new.yaml
+            yq ".spec.tasks |= map(select(.name == \"create-api-in-apic\").params |=map(select(.name ==\"apic-mgmt-server\").value=\"$APIC_MGMT_SERVER\"))" < app-pipeline.yaml > app-pipeline-new.yaml
             cat app-pipeline-new.yaml
             
             oc apply -f ibm-pak.yaml
