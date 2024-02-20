@@ -1598,6 +1598,25 @@ spec:
               
               sleep 10
             done
+    - name: dmc-profile-fix
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - run-the-deployer
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+      params:
+        - name: SCRIPT
+          value: | 
+            cd cp4d/cp4d-pipeline-run
+            ls -la
+            echo "Fix DMC"
+            ./dmc-fix.sh
+            "Wait 30 mins and retry"
+            sleep 30m
+            ./dmc-fix.sh
     - name: install-cp4i
       taskRef:
         kind: Task
