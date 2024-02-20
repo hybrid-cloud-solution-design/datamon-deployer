@@ -1859,7 +1859,7 @@ spec:
             done
 
             
-            export APIC_MGMT_SERVER=$(oc get route -l app.kubernetes.io/name=platform-api-endpoint -n $APIC_NAMESPACE -o jsonpath="{.items[].spec.host}")
+            export APIC_MGMT_SERVER=$(oc get route -l app.kubernetes.io/name=platform-api-endpoint -n integration -o jsonpath="{.items[].spec.host}")
             echo "Endpoint $APIC_MGMT_SERVER"
             echo "fix pipeline:"
             yq ".spec.tasks |= map(select(.name == \"create-api-in-apic\").params |=map(select(.name ==\"apic-mgmt-server\").value=\"$APIC_MGMT_SERVER\"))" < app-pipeline.yaml > app-pipeline-new.yaml
