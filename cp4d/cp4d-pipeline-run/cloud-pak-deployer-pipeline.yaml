@@ -927,6 +927,17 @@ spec:
             echo "Username: admin"
             echo "Password: $initial_admin_password"
 
+            echo "Minio (object store) parameters"
+            oc create route edge ibm-lh-lakehouse-minio-console --service=ibm-lh-lakehouse-minio-svc --port=9001 -n cpd
+            minio_console=$(oc get route ibm-lh-lakehouse-minio-console -n cpd --template='{{ .spec.host }}')
+
+            LH_S3_ACCESS_KEY=$(oc get secret ibm-lh-minio-secret -n cpd -o jsonpath='{.data.LH_S3_ACCESS_KEY}' | base64 -d)
+            LH_S3_SECRET_KEY=$(oc get secret ibm-lh-minio-secret -n cpd -o jsonpath='{.data.LH_S3_SECRET_KEY}' | base64 -d)
+            echo "Endpoint: ibm-lh-lakehouse-minio-svc.cpd.svc.cluster.local:9000"
+            echo "LH_S3_ACCESS_KEY: $LH_S3_ACCESS_KEY"
+            echo "LH_S3_SECRET_KEY: $LH_S3_SECRET_KEY"
+            echo "Minio console: https://$minio_console"
+
             oc patch configmap/pipeline-output -p "{\"data\":{\"Status\":\"Pipeline run Successful\",\"CP4D-Console-Route\":\"${cpd_route}\",\"CP4D-Initial-Admin-Username\":\"admin\",\"CP4D-Initial-Admin-Password\":\"${initial_admin_password}\"}}"
   tasks:
     - name: git-clone
@@ -1240,7 +1251,7 @@ spec:
                     description: Db2 OLTP
                     size: $(params.db2-size)
                     instances:
-                    - name: db2oltp-31313131
+                    - name: datamon
                       metadata_size_gb: 20
                       data_size_gb: 20
                       backup_size_gb: 20  

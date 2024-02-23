@@ -7,7 +7,8 @@ spec:
   params:
     - name: apic-image
       description: image used to execute this task
-      default: "image-registry.openshift-image-registry.svc:5000/datamon/apic-tekton"
+      default: >-
+        image-registry.openshift-image-registry.svc:5000/datamon/apictekton
     - name: apic-mgmt-server
       description: APIC api server url
       default: "apic-dm-mgmt-platform-api-apic.apps.ocp4vmw2.sanfran.pbm.ihost.com"

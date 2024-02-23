@@ -74,14 +74,14 @@ spec:
       params:
         - name: apic-image
           value: >-
-            image-registry.openshift-image-registry.svc:5000/datamon/apic-tekton
+            image-registry.openshift-image-registry.svc:5000/datamon/apictekton
         - name: apic-mgmt-server
           value: >-
             api-manage-cb35bb2a-platform-api-integration.hostname
         - name: apic-porg-dev-owner-username
-          value: dev-owner-username
+          value: esgadmin
         - name: apic-porg-dev-owner-password
-          value: dev-owner-password
+          value: passw0rd
         - name: apic-porg-dev-name
           value: esg-development
         - name: apic-cat-dev-name

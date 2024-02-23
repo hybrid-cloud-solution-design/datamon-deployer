@@ -21,7 +21,7 @@ spec:
       name: GIT_REVISION
       type: string
     - default: >-
-        image-registry.openshift-image-registry.svc:5000/datamon/apic-tekton
+        image-registry.openshift-image-registry.svc:5000/datamon/apictekton
       name: IMAGE_NAME
       type: string
     - default: apic-task-image
