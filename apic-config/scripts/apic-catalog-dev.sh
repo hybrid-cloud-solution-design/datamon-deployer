@@ -38,6 +38,38 @@ echo "  Looking up the URL for the portal-service"
 CAT_DEV_PORTAL_SERVICE_URL=$(apic portal-services:list --server $APIC_MGMT_SERVER --scope org --org $PORG_DEV_NAME --format json | jq -r '.results[].url')
 echo "  portal-service url - $CAT_DEV_PORTAL_SERVICE_URL"
 
+i=0
+while true
+do
+  CAT_DEV_PORTAL_SERVICE_URL=$(apic portal-services:list --server $APIC_MGMT_SERVER --scope org --org $PORG_DEV_NAME --format json | jq -r '.results[].url')
+  echo "  portal-service url - $CAT_DEV_PORTAL_SERVICE_URL"
+  # Check to see if portal-service ready
+  # oc get -n integration deployment -l app.kubernetes.io/name=juhu
+  if [ -z "$CAT_DEV_PORTAL_SERVICE_URL" ] ; then
+    echo "Still waiting for portal-service to exist"
+  else
+    echo "portal-service exists -ending wait loop"
+    break
+  fi
+
+  # Check to make sure the job hasn't completed
+  # is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+  # did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+  #if [ $is_complete != "true" ] | [ $did_fail == "true" ] ; then
+  #  echo "$is_complete"
+  #  echo "$did_fail"
+  #  echo "Cloud Pak Deployer job is Complete"
+  #  break
+  #fi
+
+  ((i++))
+  sleep 60
+  if [[ "$i" == '700' ]]; then
+    echo "portal-service not created within timeout limit"
+    break
+  fi
+done
+
 ### gas commented - approvals not needed
 #   '.portal.portal_service_url=$CAT_DEV_PORTAL_SERVICE_URL | .portal.type="drupal" | .product_lifecycle_approvals=["staged","published","deprecated","retired","replace","supersede"]' \
 

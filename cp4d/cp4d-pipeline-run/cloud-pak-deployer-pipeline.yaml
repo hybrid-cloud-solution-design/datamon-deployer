@@ -1252,10 +1252,10 @@ spec:
                     size: $(params.db2-size)
                     instances:
                     - name: datamon
-                      metadata_size_gb: 20
-                      data_size_gb: 20
-                      backup_size_gb: 20  
-                      transactionlog_size_gb: 20
+                      metadata_size_gb: 60
+                      data_size_gb: 60
+                      backup_size_gb: 60  
+                      transactionlog_size_gb: 60
                     state: $(params.db2-state)
 
                   - name: db2wh
@@ -1625,15 +1625,17 @@ spec:
             ls -la
             echo "Fix DMC"
             ./dmc-fix.sh
-            "Wait 30 mins and retry"
+            date
+            echo "Wait 30 mins and retry"
             sleep 30m
+            date
             ./dmc-fix.sh
     - name: install-cp4i
       taskRef:
         kind: Task
         name: ibm-pak
       runAfter:
-        - git-clone
+        - run-the-deployer
       workspaces:
         - name: manifest-dir
           workspace: workspace        
@@ -1802,7 +1804,7 @@ spec:
         kind: Task
         name: ibm-pak
       runAfter:
-        - git-clone
+        - run-the-deployer
       workspaces:
         - name: manifest-dir
           workspace: workspace        
