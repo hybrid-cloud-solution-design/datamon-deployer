@@ -1,7 +1,7 @@
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  generateName: cloud-pak-deployer-4.8.0-run-
+  generateName: deployer-datamon-demo-run-
   namespace: default
   labels:
     tekton.dev/pipeline: cloud-pak-deployer
@@ -46,7 +46,7 @@ spec:
     - name: ws-runtimes-state
       value: installed
   pipelineRef:
-    name: cloud-pak-deployer-4.8
+    name: deployer-datamon-demo
   serviceAccountName: pipeline
   timeouts:
     pipeline: 8h0m0s
