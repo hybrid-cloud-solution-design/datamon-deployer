@@ -1,0 +1,439 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: acme-apic-pipeline
+spec:
+  params:
+    - default: integration
+      name: cp4i-namespace
+      type: string
+  tasks:
+    - name: conigure-acme-org
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "wait for the apicluster instance"
+
+            i=0
+            while true
+            do
+              status=$(oc get -n $(params.cp4i-namespace) apiconnectcluster -o yaml | yq '.items[0].status.conditions.[] | select(.type == "Ready") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for apiconnectcluster to be ready"
+              else
+                echo "apiconnectcluster ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo " apiconnectcluster not created within timeout limit"
+                exit 1
+              fi
+            done 
+
+            echo "wait for the portalcluster instance"
+            i=0
+            while true
+            do
+              status=$(oc get -n $(params.cp4i-namespace) portalcluster -o yaml | yq '.items[0].status.conditions.[] | select(.type == "Ready") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for portalcluster to be ready"
+              else
+                echo "portalcluster ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo " portalcluster not created within timeout limit"
+                exit 1
+              fi
+            done 
+
+            echo "setup variables"
+
+            ###################
+            # setup vars      #
+            ###################
+
+            ### MOVED TO PIPELINE
+
+            echo "Get APIC_ENDPOINT"
+            export APIC_ENDPOINT=$(oc get route -l app.kubernetes.io/name=platform-api-endpoint -n integration -o jsonpath="{.items[].spec.host}")
+            echo "Get client secret"
+            export APIC_SECRET=$(oc get  -n integration managementcluster api-management-mgmt -o jsonpath="{.status.toolkitCredentialSecret}")
+            export APIC_CLIENT_ID=$(oc extract --namespace integration secret/$APIC_SECRET --keys=credential.json --to=- | jq -r .id)
+            export APIC_CLIENT_SECRET=$(oc extract --namespace integration secret/$APIC_SECRET --keys=credential.json --to=- | jq -r .secret)
+
+            export APIC_ADMIN_REALM="admin/default-idp-1"
+            export APIC_PROVIDER_REALM="provider/openldap"
+            export APIC_ADMIN_ORG="admin"
+            export APIC_ADMIN_USER=admin
+
+            export APIC_PWD=$(oc get secret "api-management-mgmt-admin-pass" -n integration -o jsonpath="{.data.password}"| base64 -d)
+
+            export BEARER_TOKEN=$(curl -k -X POST https://$APIC_ENDPOINT/api/token \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\": \"$APIC_ADMIN_USER\",
+            \"password\": \"$APIC_PWD\",
+            \"realm\": \"$APIC_ADMIN_REALM\", 
+            \"client_id\": \"$APIC_CLIENT_ID\",
+            \"client_secret\": \"$APIC_CLIENT_SECRET\",
+            \"grant_type\": \"password\"}"  | jq -r .access_token)
+
+
+            ######################################################
+            # Add New Mail Server Definition and Send Test Email #
+            ######################################################
+            export APIC_MAIL_SERVER="apic-mail"
+            export MAIL_SERVER_HOST="mailserver.development-mailserver"
+            export MAIL_SERVER_PORT=1025
+
+            export BUILD_DIR=rest-build
+            mkdir ${BUILD_DIR}
+
+            curl -k --request POST \
+              --url https://$APIC_ENDPOINT/api/orgs/$APIC_ADMIN_ORG/mail-servers \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data '{
+              "type": "mail_server",
+              "title": "apic-mail",
+              "host": "mailserver.development-mailserver",
+              "port": 1025
+            }' > ${BUILD_DIR}/${APIC_MAIL_SERVER}-create-output.json
+
+            #################################################
+            # Update Cloud Settings to use new Email Server #
+            #################################################
+            echo "Get current cloud settings and store in cloud-settings-original.json file..."
+            #apic cloud-settings:get -s $APIC_MGMT_SERVER --format json --fields mail_server_url --output - > cloud-setting-ms-original.json
+
+
+            curl -k --request GET \
+              --url https://$APIC_ENDPOINT/api/cloud/settings \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' > ${BUILD_DIR}/cloud-settings-output.json
+
+            echo "  Get the URL for the new mail server..."
+            MAIL_SERVER_URL=$(cat  ${BUILD_DIR}/${APIC_MAIL_SERVER}-create-output.json | jq -r '.url')
+            echo "  New Mail Server URL - $MAIL_SERVER_URL" 
+
+            echo "  Update New Mail Server URL and save in cloud-settings-ms-updated.json file"
+            jq --arg MAIL_SERVER_URL "$MAIL_SERVER_URL" \
+              '.mail_server_url=$MAIL_SERVER_URL'\
+              ${BUILD_DIR}/cloud-settings-output.json > ${BUILD_DIR}/cloud-setting-ms-updated.json
+
+            echo "  Add the New Mail Server to the cloud settings in APIC"
+            curl -k --request PUT \
+              --url https://$APIC_ENDPOINT/api/cloud/settings \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "@${BUILD_DIR}/cloud-setting-ms-updated.json"
+
+            #################################################
+            # Create LDAP Registry                          #
+            #################################################
+            # get ldap url
+            export LDAP_INT_URL=$(curl -k --request GET \
+              --url https://$APIC_ENDPOINT/api/cloud/integrations/user-registry \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' | jq -r '.results[] | select(.name == "ldap") | .url')
+
+            echo "LDAP_INT_URL: $LDAP_INT_URL" 
+
+            cat > ${BUILD_DIR}/openldap-template.json <<EOF
+            {
+                "name": "openldap",
+                "title": "openldap",
+                "integration_url": "int-url",
+                "user_managed": false,
+                "user_registry_managed": false,
+                "external_group_mapping_enabled": false,
+                "case_sensitive": false,
+                "email_required": true,
+                "email_unique_if_exist": true,
+                "identity_providers": [
+                    {
+                        "name": "openldap",
+                        "title": "openldap"
+                    }
+                ],
+                "configuration": {
+                    "admin_dn": "cn=admin,dc=acme,dc=org",
+                    "admin_password": "adminpassword",
+                    "search_dn_base": "dc=acme,dc=org",
+                    "search_dn_scope": "sub",
+                    "authenticated_bind": "true",
+                    "authentication_method": "search_dn",
+                    "search_dn_filter_prefix": "(uid=",
+                    "search_dn_filter_suffix": ")"
+                },
+                "endpoint": {
+                    "endpoint": "ldap://openldap.openldap:389"
+                }
+            }
+            EOF
+            export LDAP_PASSWD=$(oc extract --namespace openldap secret/openldap --keys=adminpassword --to=-)
+
+            echo "Set url and passwd"
+
+            jq --arg LDAP_INT_URL "$LDAP_INT_URL" --arg LDAP_PASSWD "$LDAP_PASSWD" '.integration_url=$LDAP_INT_URL | .configuration.admin_password=$LDAP_PASSWD' ${BUILD_DIR}/openldap-template.json > "${BUILD_DIR}/openldap-output.json"
+
+            echo "Creating openldap in APIC using generated ${BUILD_DIR}/openldap-output.json file..."
+
+            curl -k --request POST \
+              --url https://$APIC_ENDPOINT/api/orgs/$APIC_ADMIN_ORG/user-registries \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "@${BUILD_DIR}/openldap-output.json" > ${BUILD_DIR}/openldap-create-output.json
+
+
+            echo "  Get the URL for the openldap "
+            export OPEN_LDAP_URL=$(cat ${BUILD_DIR}/openldap-create-output.json | jq -r '.url')
+            echo "  OPEN_LDAP_URL URL - $OPEN_LDAP_URL"
+
+            echo "Get current providers"
+
+            # apic user-registry-settings:get --server $APIC_MGMT_SERVER --format json --output - > ${BUILD_DIR}/providers-output.json
+            curl -k --request GET \
+              --url https://$APIC_ENDPOINT/api/cloud/settings/user-registries \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' > ${BUILD_DIR}/providers-output.json
+
+            jq --arg OPEN_LDAP_URL "$OPEN_LDAP_URL" '.provider_user_registry_urls+=[$OPEN_LDAP_URL]' ${BUILD_DIR}/providers-output.json > "${BUILD_DIR}/providers-output2.json"
+
+            #apic user-registry-settings:update --server $APIC_MGMT_SERVER --output - ${BUILD_DIR}/providers-output2.json
+            curl -k --request PUT  \
+              --url https://$APIC_ENDPOINT/api/cloud/settings/user-registries \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "@${BUILD_DIR}/providers-output2.json" > ${BUILD_DIR}/providers-update-output.json
+
+
+            ###########################
+            # Create Development pOrg #
+            ###########################
+            ##### Provider Org
+            export CUSTOMER_NAME=acme
+            export PORG_DEV_TITLE="ACME"
+            export PORG_DEV_NAME=$(echo ${PORG_DEV_TITLE// /-} | awk '{print tolower($0)}')
+
+            export PORG_DEV_OWNER_FN="acme"
+            export PORG_DEV_OWNER_LN="admin"
+            export PORG_DEV_OWNER_EMAIL="${PORG_DEV_OWNER_USER}@${CUSTOMER_NAME}.org"
+            export PORG_DEV_OWNER_USER="developer-1"
+            export PORG_DEV_OWNER_PWD="passw0rd"
+
+            echo " Get user $PORG_DEV_OWNER_USER in APIC using generated ${BUILD_DIR}/${PORG_DEV_OWNER_USER}.json file..."
+            #apic users:get --server $APIC_MGMT_SERVER --org $APIC_ADMIN_ORG --user-registry openldap --format json --output - developer-1 > ${BUILD_DIR}/${PORG_DEV_OWNER_USER}-create-output.json
+            ## TODO Test if exists
+            curl -k --request POST \
+              --url "https://$APIC_ENDPOINT/api/user-registries/$APIC_ADMIN_ORG/openldap/users" \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data '{"username":"developer-1", "email":"developer-1@acme.org"}' > ${BUILD_DIR}/${PORG_DEV_OWNER_USER}-create-output.json
+
+
+            echo "  Get the URL for the user"
+            PORG_DEV_OWNER_USER_URL=$(cat ${BUILD_DIR}/${PORG_DEV_OWNER_USER}-create-output.json | jq -r '.url')
+            echo "  New User URL - $PORG_DEV_OWNER_USER_URL"
+
+            echo " "
+            echo "Build Dev pOrg file and store in ${BUILD_DIR}/${PORG_DEV_NAME}.json file..."
+            jq -n \
+              --arg PORG_DEV_TITLE "$PORG_DEV_TITLE" \
+              --arg PORG_DEV_NAME "$PORG_DEV_NAME" \
+              --arg PORG_DEV_OWNER_USER_URL "$PORG_DEV_OWNER_USER_URL" \
+              '.title=$PORG_DEV_TITLE | .name=$PORG_DEV_NAME | .owner_url=$PORG_DEV_OWNER_USER_URL' \
+              > "${BUILD_DIR}/${PORG_DEV_NAME}.json"
+
+            echo " "
+            echo "Creating the pOrg ($PORG_DEV_TITLE) in APIC using generated ${BUILD_DIR}/${PORG_DEV_NAME}.json file..."
+            #apic orgs:create --server $APIC_MGMT_SERVER --format json ${BUILD_DIR}/${PORG_DEV_NAME}.json > ${BUILD_DIR}/${PORG_DEV_NAME}-create-output.json
+
+            curl -k --request POST \
+              --url https://$APIC_ENDPOINT/api/cloud/orgs \
+              --header "Authorization: Bearer $BEARER_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "@${BUILD_DIR}/${PORG_DEV_NAME}.json" 
+
+
+            #############################
+            # Create & Config Catalog   #
+            #############################
+
+            "Login to POrg"
+            export APIC_PROVIDER_REALM="provider/openldap"
+            export CAT_DEV_TITLE="Marketplace"
+            export CAT_DEV_NAME=$(echo ${CAT_DEV_TITLE// /-} | awk '{print tolower($0)}')
+
+            export ORG_TOKEN=$(curl -k -X POST https://$APIC_ENDPOINT/api/token \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\": \"$PORG_DEV_OWNER_USER\",
+            \"password\": \"$PORG_DEV_OWNER_PWD\",
+            \"realm\": \"$APIC_PROVIDER_REALM\", 
+            \"client_id\": \"$APIC_CLIENT_ID\",
+            \"client_secret\": \"$APIC_CLIENT_SECRET\",
+            \"grant_type\": \"password\"}"  | jq -r .access_token)
+
+            echo "Create $CAT_DEV_NAME Catalog in Dev pOrg..."
+            echo "  Build create Catalog file - ${BUILD_DIR}/${CAT_DEV_NAME}-dev-create.json"
+            jq -n \
+              --arg CAT_DEV_TITLE "$CAT_DEV_TITLE" \
+              --arg CAT_DEV_NAME "$CAT_DEV_NAME" \
+              '.title=$CAT_DEV_TITLE | .name=$CAT_DEV_NAME' \
+              > ${BUILD_DIR}/${CAT_DEV_NAME}-dev-create.json
+
+
+            echo "  Create Catalog by applying the ${BUILD_DIR}/${CAT_DEV_NAME}-dev-create.json file storing result in ${BUILD_DIR}/${CAT_DEV_NAME}-dev-create-output.json"
+            #apic catalogs:create --server $APIC_MGMT_SERVER --org $PORG_DEV_NAME --format json ${BUILD_DIR}/${CAT_DEV_NAME}-dev-create.json > ${BUILD_DIR}/${CAT_DEV_NAME}-dev-create-output.json
+
+            curl -k --request POST \
+              --url https://$APIC_MGMT_SERVER/api/orgs/$PORG_DEV_NAME/catalogs \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "@${BUILD_DIR}/${CAT_DEV_NAME}-dev-create.json" > ${BUILD_DIR}/${CAT_DEV_NAME}-dev-create-output.json
+
+
+              #####
+            # TODO change user registry, add api registry, product visibility
+
+            echo "  Looking up the URL for the portal-service"
+            #CAT_DEV_PORTAL_SERVICE_URL=$(apic portal-services:list --server $APIC_MGMT_SERVER --scope org --org $PORG_DEV_NAME --format json | jq -r '.results[].url')
+
+            CAT_DEV_PORTAL_SERVICE_URL=$(curl -k --request GET \
+              --url "https://$APIC_MGMT_SERVER/api/orgs/$PORG_DEV_NAME/portal-services" \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' | jq -r '.results[].url')
+
+            echo "  portal-service url - $CAT_DEV_PORTAL_SERVICE_URL"
+
+            echo "Setup Openldap as UR for catalog"
+            CAT_OPEN_LDAP_URL=$(curl -k --request POST \
+              --url https://$APIC_MGMT_SERVER/api/catalogs/$PORG_DEV_NAME/$CAT_DEV_NAME/configured-catalog-user-registries \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data  "{\"user_registry_url\": \"$OPEN_LDAP_URL\"}" | jq -r '.url')
+            echo "CAT_OPEN_LDAP_URL - $CAT_OPEN_LDAP_URL"
+
+            echo "Setup Openldap as UR for catalog APIs"
+            CAT_API_LDAP_URL=$(curl -k --request POST \
+              --url https://$APIC_MGMT_SERVER/api/catalogs/$PORG_DEV_NAME/$CAT_DEV_NAME/configured-api-user-registries \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data  "{\"user_registry_url\": \"$OPEN_LDAP_URL\"}" | jq -r '.url')
+            echo "CAT_API_LDAP_URL - $CAT_API_LDAP_URL"
+
+            echo "Get catalog settings"
+            curl -k --request GET \
+              --url "https://$APIC_MGMT_SERVER/api/catalogs/$PORG_DEV_NAME/$CAT_DEV_NAME/settings" \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' > ${BUILD_DIR}/${CAT_DEV_NAME}-settings.json
+
+            echo "Update portal settings"
+
+            echo "  Build the catalog setting update for the ${CAT_DEV_TITLE} catalog in the Dev pOrg to add the Portal and Approval Settings"
+            echo "  Catalog setting update file stored in ${BUILD_DIR}/${CAT_DEV_NAME}-dev-catalog-settings-update.json"
+            jq -n \
+            --arg CAT_DEV_PORTAL_SERVICE_URL "$CAT_DEV_PORTAL_SERVICE_URL" \
+              '.portal.portal_service_url=$CAT_DEV_PORTAL_SERVICE_URL | .portal.type="drupal" ' \
+              > ${BUILD_DIR}/${CAT_DEV_NAME}-dev-catalog-settings-update.json
+
+            curl -k --request PUT \
+              --url https://$APIC_MGMT_SERVER/api/catalogs/$PORG_DEV_NAME/$CAT_DEV_NAME/settings \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "@${BUILD_DIR}/${CAT_DEV_NAME}-dev-catalog-settings-update.json"
+
+
+            ######################################
+            # Create Owner for Dev Consumer cOrg #
+            ######################################
+            # echo " "
+            export CORG_DEV_TITLE="Consumer Org"
+            export CORG_DEV_NAME=$(echo ${CORG_DEV_TITLE// /-} | awk '{print tolower($0)}')
+
+            export CORG_DEV_OWNER_FN="consumer"
+            export CORG_DEV_OWNER_LN="${CUSTOMER_NAME}"
+            export CORG_DEV_OWNER_USER="consumer-1"
+            export CORG_DEV_OWNER_PWD="passw0rd"
+            export CORG_DEV_OWNER_EMAIL="${CORG_DEV_OWNER_USER}@${CUSTOMER_NAME}.org"
+
+
+            echo "  Creating the cOrg owner ($CORG_DEV_OWNER_USER) in APIC"
+            #apic users:create --server $APIC_MGMT_SERVER --org $PORG_DEV_NAME --user-registry openldap --format json ${BUILD_DIR}/${CORG_DEV_NAME}-owner.json > ${BUILD_DIR}/${CORG_DEV_NAME}-owner-create-output.json
+
+            curl -k --request POST \
+              --url "https://$APIC_ENDPOINT/api/user-registries/$PORG_DEV_NAME/openldap/users" \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "{\"username\":\"$CORG_DEV_OWNER_USER\", \"email\":\"$CORG_DEV_OWNER_EMAIL\"}" > ${BUILD_DIR}/${CORG_DEV_OWNER_USER}-create-output.json
+
+
+
+            echo "  Get the URL for the Owner user"
+            CORG_DEV_OWNER_USER_URL=$(cat ${BUILD_DIR}/${CORG_DEV_OWNER_USER}-create-output.json | jq -r '.url')
+            echo "  Owner User URL - $CORG_DEV_OWNER_USER_URL"
+
+            echo " "
+            echo "Build Dev cOrg file and store in ${BUILD_DIR}/${CORG_DEV_NAME}.json file..."
+            jq -n \
+              --arg CORG_DEV_TITLE "$CORG_DEV_TITLE" \
+              --arg CORG_DEV_NAME "$CORG_DEV_NAME" \
+              --arg CORG_DEV_OWNER_USER_URL "$CORG_DEV_OWNER_USER_URL" \
+              '.title=$CORG_DEV_TITLE | .name=$CORG_DEV_NAME | .owner_url=$CORG_DEV_OWNER_USER_URL' \
+              > "${BUILD_DIR}/${CORG_DEV_NAME}.json"
+
+            echo " "
+            echo "Creating the cOrg ($CORG_DEV_TITLE) in APIC using generated ${BUILD_DIR}/${CORG_DEV_NAME}.json file..."
+            #apic consumer-orgs:create --server $APIC_MGMT_SERVER --org $PORG_DEV_NAME --catalog ${CAT_DEV_NAME} --format json ${BUILD_DIR}/${CORG_DEV_NAME}.json > ${BUILD_DIR}/${CORG_DEV_NAME}-create-output.json
+
+            curl -k --request POST \
+              --url https://$APIC_ENDPOINT/api/catalogs/$PORG_DEV_NAME/$CAT_DEV_NAME/consumer-orgs \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --header 'accept: application/json' \
+              --header 'content-type: application/json' \
+              --data "@${BUILD_DIR}/${CORG_DEV_NAME}.json"  
+
+
+            echo "Creating the cOrg ($CORG_DEV_TITLE) in APIC using generated ${BUILD_DIR}/${CORG_DEV_NAME}.json file..."
+            curl -k --request POST \
+              --url "https://$APIC_ENDPOINT/api/consumer-orgs/$PORG_DEV_NAME/$CAT_DEV_NAME/$CORG_DEV_NAME/apps" \
+              --header 'Accept: application/json' \
+              --header 'Content-Type: application/json' \
+              --header "Authorization: Bearer $ORG_TOKEN" \
+              --data-raw '{
+              "title": "Data_Consumer_App"
+            }'
+
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - xxxx          
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+
+
+  workspaces:
+    - name: workspace

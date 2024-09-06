@@ -1,0 +1,289 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: apic-install-pipeline
+spec:
+  params:
+    - default: integration
+      name: cp4i-namespace
+      type: string
+  tasks:
+    - name: add-catalog-sources
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "Add catalog sources"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            metadata:
+              name: ibm-apiconnect-catalog
+              namespace: openshift-marketplace
+            spec:
+              displayName: ibm-apiconnect-5.2.0
+              publisher: IBM
+              image: icr.io/cpopen/ibm-apiconnect-catalog@sha256:61f52267bff3beb4455636763af4c95c6a5b7bc57b159ce0846d53364f2d4134
+              sourceType: grpc
+              updateStrategy:
+                registryPoll:
+                  interval: 30m0s
+            EOF
+
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            metadata:
+              name: opencloud-operators
+              namespace: openshift-marketplace
+            spec:
+              displayName: ibm-cp-common-services-4.6.4
+              publisher: IBM
+              image: icr.io/cpopen/ibm-common-service-catalog@sha256:9d00de6ec33a429cf9eb621461b9fd428522d626905658d32e294e031990aa9b
+              sourceType: grpc
+              updateStrategy:
+                registryPoll:
+                  interval: 30m0s
+            EOF
+
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            metadata:
+              name: ibm-datapower-operator-catalog
+              namespace: openshift-marketplace
+            spec:
+              displayName: ibm-datapower-operator-1.11.1
+              publisher: IBM
+              image: icr.io/cpopen/datapower-operator-catalog@sha256:8edd54bff60b24316cd7cc90db3d6c6918bb04e5a2265e81de6d46c526997545
+              sourceType: grpc
+              updateStrategy:
+                registryPoll:
+                  interval: 30m0s
+            EOF
+
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            metadata:
+              name: ibm-integration-platform-navigator-catalog
+              namespace: openshift-marketplace
+            spec:
+              displayName: ibm-integration-platform-navigator-7.3.0
+              publisher: IBM
+              image: icr.io/cpopen/ibm-integration-platform-navigator-catalog@sha256:80ce1e6752d359870237ed30ba24f6271241e499e546214f30f4eb0962ec5029
+              sourceType: grpc
+              updateStrategy:
+                registryPoll:
+                  interval: 30m0s
+            EOF
+      taskRef:
+        kind: Task
+        name: ibm-pak
+    - name: install-operators
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "Installing operators"
+            echo "Create namespace"
+            oc apply -f - <<EOF 
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: $(params.cp4i-namespace)
+            EOF
+
+            echo "Create OperatorGroup"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1
+            kind: OperatorGroup
+            metadata:
+              name: ibm-integration-operatorgroup
+              labels:
+                backup.integration.ibm.com/component: operatorgroup     
+              namespace: $(params.cp4i-namespace)           
+            spec:
+              targetNamespaces:
+              - $(params.cp4i-namespace)
+            EOF
+
+            echo "Create ibm-common-service-operator"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: Subscription
+            metadata:
+              name: ibm-common-service-operator
+              labels:
+                operators.coreos.com/ibm-common-service-operator.integration: ''    
+              namespace: $(params.cp4i-namespace)     
+            spec:
+              channel: v4.6
+              installPlanApproval: Automatic
+              name: ibm-common-service-operator
+              source: opencloud-operators
+              sourceNamespace: openshift-marketplace
+            EOF
+
+
+            echo "Create ibm-integration-platform-navigator"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: Subscription
+            metadata:
+              name: ibm-integration-platform-navigator
+              namespace: $(params.cp4i-namespace) 
+            spec:
+              channel: v7.3-sc2
+              name: ibm-integration-platform-navigator
+              source: ibm-integration-platform-navigator-catalog
+              sourceNamespace: openshift-marketplace
+              installPlanApproval: Automatic  
+            EOF
+
+            echo "Create datapower-operator"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: Subscription
+            metadata:
+              name: datapower-operator
+              namespace: $(params.cp4i-namespace)  
+            spec:
+              channel: v1.11-sc2
+              name: datapower-operator
+              source: ibm-datapower-operator-catalog
+              sourceNamespace: openshift-marketplace
+              installPlanApproval: Automatic  
+            EOF
+
+            echo "Create ibm-apiconnect"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: Subscription
+            metadata:
+              name: ibm-apiconnect
+              namespace: $(params.cp4i-namespace) 
+            spec:
+              channel: v5.2-sc2
+              name: ibm-apiconnect
+              source: ibm-apiconnect-catalog
+              sourceNamespace: openshift-marketplace
+              installPlanApproval: Automatic 
+            EOF
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - add-catalog-sources        
+
+    - name: create-platform-ui
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "wait for the platform operator"
+
+            oc get operator ibm-integration-platform-navigator.integration -o yaml | yq '.status.components.refs[].conditions.[]'
+
+
+            i=0
+            while true
+            do
+              status=$(oc get operator ibm-integration-platform-navigator.integration -o yaml | yq '.status.components.refs[].conditions.[] | select(.type == "Succeeded") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for platformnavigator operator to be ready"
+              else
+                echo "Platformnavigator operator  ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo "Deployment Platformnavigator not created within timeout limit"
+                exit 1
+              fi
+            done 
+
+            echo "Create platform navigator instance"
+            oc apply -f - <<EOF 
+            apiVersion: integration.ibm.com/v1beta1
+            kind: PlatformNavigator
+            metadata:
+              name: integration-quickstart
+              namespace: $(params.cp4i-namespace)
+              labels:
+                backup.integration.ibm.com/component: platformnavigator        
+            spec:
+              license:
+                accept: true
+                license: L-VTPK-22YZPK
+              replicas: 1
+              version: 16.1.0
+            EOF
+
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - install-operators        
+
+
+    - name: create-api-connect
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "wait for the api-connect operator"
+
+            oc get operator ibm-apiconnect.integration -o yaml | yq '.status.components.refs[].conditions.[]'
+
+
+            i=0
+            while true
+            do
+              status=$(oc get operator ibm-apiconnect.integration -o yaml | yq '.status.components.refs[].conditions.[] | select(.type == "Succeeded") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if the deployment exists and apply patch if it does
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for apiconnect operator to be ready"
+              else
+                echo "apiconnect operator  ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo "Deployment apiconnect not created within timeout limit"
+                exit 1
+              fi
+            done 
+
+            echo "Create apiconnect instance"
+            oc apply -f - <<EOF 
+            kind: APIConnectCluster
+            apiVersion: apiconnect.ibm.com/v1beta1
+            metadata:
+              name: api-management
+              namespace: $(params.cp4i-namespace)
+              annotations: 
+                apiconnect-operator/backups-not-configured: "true"  
+              labels:
+                app.kubernetes.io/instance: apiconnect
+                app.kubernetes.io/managed-by: ibm-apiconnect
+                app.kubernetes.io/name: apiconnect-small    
+            spec:
+              license:
+                accept: true
+                license: L-DZZQ-MGVN8V
+                metric: VIRTUAL_PROCESSOR_CORE
+                use: production
+              profile: n1xc7.m48
+              version: 10.0.8.0
+              storageClassName: ocs-storagecluster-ceph-rbd
+            EOF
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - create-platform-ui        
+

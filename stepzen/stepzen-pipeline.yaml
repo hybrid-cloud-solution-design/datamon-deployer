@@ -1,0 +1,544 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: stepzen-pipeline
+spec:
+  tasks:
+    - name: namespace-setup
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "Create stepzen namespace"
+            oc apply -f - <<EOF 
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: stepzen
+            EOF
+
+            echo "Create operator group for stepzen"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1
+            kind: OperatorGroup
+            metadata:
+              name: stepzen-group
+              namespace: stepzen           
+            spec:
+              targetNamespaces:
+              - stepzen
+            EOF
+
+            echo "copy entitelment key"
+            export ibm_entitlement_key=$(oc extract --namespace cloud-pak-deployer secret/cloud-pak-entitlement-key --keys=cp-entitlement-key --to=-)
+            oc create secret -n stepzen docker-registry ibm-entitlement-key --docker-server=cp.icr.io --docker-username=cp --docker-password=$ibm_entitlement_key
+
+            echo "key created"
+      taskRef:
+        kind: Task
+        name: ibm-pak
+    - name: install-postgres-operator
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "Create crunchy-postgres-operator"
+            oc apply -f - <<EOF 
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: Subscription
+            metadata:
+              name: crunchy-postgres-operator
+              namespace: stepzen 
+            spec:
+              channel: v5
+              name: crunchy-postgres-operator
+              source: certified-operators
+              sourceNamespace: openshift-marketplace
+              startingCSV: postgresoperator.v5.6.0
+              installPlanApproval: Automatic  
+            EOF
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - namespace-setup
+    - name: create-postgres-cluster
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "wait for the platform operator"
+
+            oc get operator crunchy-postgres-operator.stepzen -o yaml | yq '.status.components.refs[].conditions.[]'
+
+
+            i=0
+            while true
+            do
+              status=$(oc get operator crunchy-postgres-operator.stepzen -o yaml | yq '.status.components.refs[].conditions.[] | select(.type == "Succeeded") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if operator is ready
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for postgres operator to be ready"
+              else
+                echo "postgres operator  ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo "Deployment postgres not created within timeout limit"
+                exit 1
+              fi
+            done 
+
+            echo "Create postgres instance"
+            oc apply -f - <<EOF 
+            apiVersion: postgres-operator.crunchydata.com/v1beta1
+            kind: PostgresCluster
+            metadata:
+              name: postgres-cluster
+              namespace: stepzen
+            spec:
+              port: 5432
+              backups:
+                pgbackrest:
+                  repos:
+                    - volume:
+                        volumeClaimSpec:
+                          accessModes:
+                            - ReadWriteOnce
+                          resources:
+                            requests:
+                              storage: 1Gi
+                      name: repo1
+              instances:
+                - dataVolumeClaimSpec:
+                    accessModes:
+                      - ReadWriteOnce
+                    resources:
+                      requests:
+                        storage: 1Gi
+                  replicas: 1
+              postgresVersion: 15
+            EOF
+
+            echo "wait for cluster to be ready"
+            i=0
+            while true
+            do
+              status=$(oc get -n stepzen pod -l "postgres-operator.crunchydata.com/data=postgres" -o yaml | yq '.items[0].status.conditions[] | select(.type == "Ready") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if operator is ready
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for postgres cluster to be ready"
+              else
+                echo "postgres cluster ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo "postgres cluster not created within timeout limit"
+                exit 1
+              fi
+            done 
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - install-postgres-operator        
+    - name: deploy-stepzen
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "Create db-secret"
+            export dsn=$(oc extract -n stepzen secret/postgres-cluster-pguser-postgres-cluster --keys=uri --to=-)
+            oc create secret -n stepzen generic db-secret --from-literal DSN="$dsn" 
+
+            ls -la
+            echo "Download stepzen"
+            curl -k https://raw.githubusercontent.com/IBM/cloud-pak/master/repo/case/ibm-stepzen-case/1.0.0%2B20240709.000001/ibm-stepzen-case-1.0.0%2B20240709.000001.tgz -o ibm-stepzen-case-1.0.0+20240709.000001.tgz
+            tar -vxzf ibm-stepzen-case-1.0.0+20240709.000001.tgz
+
+            ls -la
+
+            cd ibm-stepzen-case/inventory/stepzenGraphOperator/files/deploy
+            oc project stepzen
+            echo "Install operator"
+            oc apply -f operator.yaml
+            echo "Create CRD"
+            oc apply -f crd.yaml            
+
+            echo "wait for operator pod to be ready"
+            i=0
+            while true
+            do
+              status=$(oc get -n stepzen pod -l "control-plane=stepzen-graph-operator" -o yaml | yq '.items[0].status.conditions[] | select(.type == "Ready") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if operator is ready
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for stepzen operator to be ready"
+              else
+                echo " stepzen operator ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo " stepzen operator not created within timeout limit"
+                exit 1
+              fi
+            done 
+
+            echo "Customize CR"
+            cat cr.yaml
+            yq -i '.spec.license.accept = true' cr.yaml
+            yq -i '.spec.controlDatabaseSecret = "db-secret"' cr.yaml
+            echo "final CR"
+            echo "================"
+            cat cr.yaml
+
+            oc apply -f cr.yaml
+            echo "wait for stepzen server"
+            i=0
+            while true
+            do
+              status=$(oc get stepzengraphserver stepzen -o yaml | yq '.status.conditions.[] | select(.type == "Ready") | contains({"status": "'True'"})')
+              echo "Current status: $status"
+              # Check to see if stepzengraphserver is ready
+              if [ -z "$status" ] || [ $status != "true" ] ; then
+                echo "[$((120 -$i))] Still waiting for stepzengraphserver to be ready"
+              else
+                echo "stepzengraphserver  ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '120' ]]; then
+                echo "stepzengraphserver not created within timeout limit"
+                exit 1
+              fi
+            done
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - create-postgres-cluster        
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace        
+    - name: install-openshift-routes
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "install openshift routes"
+            oc project ibm-cert-manager
+            
+            oc apply -f - <<EOF 
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRole
+            metadata:
+              name: cert-manager-openshift-routes
+            rules:
+            - apiGroups:
+              - route.openshift.io
+              resources:
+              - routes
+              verbs:
+              - get
+              - list
+              - watch
+              - patch
+              - update
+            - apiGroups:
+              - route.openshift.io
+              resources:
+              - routes/finalizers
+              verbs:
+              - update
+            - apiGroups:
+              - route.openshift.io
+              resources:
+              - routes/custom-host
+              verbs:
+              - create
+              - update
+            - apiGroups:
+              - cert-manager.io
+              resources:
+              - certificaterequests
+              verbs:
+              - create
+              - get
+              - list
+              - watch
+            - apiGroups:
+                - cert-manager.io
+              resources:
+                - certificaterequests/status
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+              - ""
+              resources:
+              - events
+              verbs:
+              - create
+              - patch
+            - apiGroups:
+              - coordination.k8s.io
+              resources:
+              - leases
+              verbs:
+              - create
+              - get
+              - list
+              - update
+            ---
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: cert-manager-openshift-routes
+              namespace: ibm-cert-manager
+            automountServiceAccountToken: false
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: cert-manager-openshift-routes
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: cert-manager-openshift-routes
+            subjects:
+            - kind: ServiceAccount
+              name: cert-manager-openshift-routes
+              namespace: ibm-cert-manager
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: cert-manager-openshift-routes
+              namespace: ibm-cert-manager
+              labels:
+                app.kubernetes.io/name: cert-manager-openshift-routes
+                app.kubernetes.io/version: "0.5.0"
+                app.kubernetes.io/component: controller
+                app.kubernetes.io/part-of: cert-manager
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: cert-manager-openshift-routes
+                  app.kubernetes.io/version: "0.5.0"
+                  app.kubernetes.io/component: controller
+                  app.kubernetes.io/part-of: cert-manager
+              template:
+                metadata:
+                  labels:
+                    app.kubernetes.io/name: cert-manager-openshift-routes
+                    app.kubernetes.io/version: "0.5.0"
+                    app.kubernetes.io/component: controller
+                    app.kubernetes.io/part-of: cert-manager
+                spec:
+                  serviceAccountName: cert-manager-openshift-routes
+                  automountServiceAccountToken: true
+                  containers:
+                    - name: cert-manager-openshift-routes
+                      image: "ghcr.io/cert-manager/cert-manager-openshift-routes:0.5.0"
+                      args:
+                      - -v=5
+                      - '--leader-election-namespace=ibm-cert-manager'
+                      ports:
+                      - containerPort: 6060
+                        name: readiness
+                        protocol: TCP
+                      - containerPort: 9402
+                        name: metrics
+                        protocol: TCP
+                      readinessProbe:
+                        httpGet:
+                          port: readiness
+                          path: "/readyz"
+                        initialDelaySeconds: 3
+                        periodSeconds: 5
+                        timeoutSeconds: 3
+            EOF
+            echo "Create clusterIssuer"
+            oc apply -f - <<EOF 
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              annotations:
+              name: letsencrypt
+            spec:
+              acme:
+                email: dataproductsolution@ibm.com
+                preferredChain: ""
+                privateKeySecretRef:
+                  name: letsencrypt
+                server: https://acme-v02.api.letsencrypt.org/directory
+                solvers:
+                  - http01:
+                      ingress: {}
+            EOF
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - deploy-stepzen
+    - name: setup-stepzen-routes
+      params:
+        - name: SCRIPT
+          value: |-
+            echo "Get cluster domain"
+            cluster_domain=$(oc get ingresses.config/cluster -o jsonpath={.spec.domain})
+            echo "Cluster domain is: $cluster_domain"
+            # apps.66b204f49a14d0001e972cdd.ocp.techzone.ibm.com
+
+            echo "Create stepzen-to-graph-server route"
+            oc apply -f - <<EOF 
+            apiVersion: route.openshift.io/v1
+            kind: Route
+            metadata:
+              annotations:
+                cert-manager.io/issuer-kind: ClusterIssuer
+                cert-manager.io/issuer-name: letsencrypt
+                haproxy.router.openshift.io/balance: random
+                haproxy.router.openshift.io/disable_cookies: "true"
+                haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains;preload
+                haproxy.router.openshift.io/timeout: 30s
+                haproxy.router.openshift.io/timeout-tunnel: 5d
+              name: stepzen-to-graph-server
+              namespace: stepzen
+            spec:
+              host: stepzen.zen.$cluster_domain
+              port:
+                targetPort: stepzen-graph-server
+              tls:
+                haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains;preload
+                insecureEdgeTerminationPolicy: None
+                termination: edge
+              to:
+                kind: Service
+                name: stepzen-graph-server
+                weight: 200
+              wildcardPolicy: None
+            EOF
+
+            echo "Create graphql-to-graph-server route"
+            oc apply -f - <<EOF 
+            apiVersion: route.openshift.io/v1
+            kind: Route
+            metadata:
+              annotations:
+                cert-manager.io/issuer-kind: ClusterIssuer
+                cert-manager.io/issuer-name: letsencrypt
+                haproxy.router.openshift.io/balance: random
+                haproxy.router.openshift.io/disable_cookies: "true"
+                haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains;preload
+                haproxy.router.openshift.io/timeout: 30s
+                haproxy.router.openshift.io/timeout-tunnel: 5d
+              name: graphql-to-graph-server
+              namespace: stepzen
+            spec:
+              host: graphql.zen.$cluster_domain
+              path: /
+              port:
+                targetPort: stepzen-graph-server
+              tls:
+                insecureEdgeTerminationPolicy: None
+                termination: edge
+              to:
+                kind: Service
+                name: stepzen-graph-server
+                weight: 150
+              wildcardPolicy: None
+            EOF
+
+            echo "Create graphql-to-graph-server-subscriptions route"
+            oc apply -f - <<EOF 
+            apiVersion: route.openshift.io/v1
+            kind: Route
+            metadata:
+              annotations:
+                cert-manager.io/issuer-kind: ClusterIssuer
+                cert-manager.io/issuer-name: letsencrypt
+                haproxy.router.openshift.io/balance: random
+                haproxy.router.openshift.io/disable_cookies: "true"
+                haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains;preload
+                haproxy.router.openshift.io/timeout: 30s
+                haproxy.router.openshift.io/timeout-tunnel: 5d
+              name: graphql-to-graph-server-subscriptions
+              namespace: stepzen
+            spec:
+              host: graphql.zen.$cluster_domain
+              path: /stepzen-subscriptions/
+              port:
+                targetPort: stepzen-graph-server-subscription
+              tls:
+                insecureEdgeTerminationPolicy: None
+                termination: edge
+              to:
+                kind: Service
+                name: stepzen-graph-server-subscription
+                weight: 150
+              wildcardPolicy: None
+            EOF
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - install-openshift-routes        
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace
+    - name: get-stepzen-account
+      params:
+        - name: SCRIPT
+          value: |-
+            ls -la
+
+            cd ibm-stepzen-case/inventory/stepzenGraphOperator/files/deploy
+            ls -la 
+            oc project stepzen
+
+            echo "Patch stepzen-admin.sh file"
+            echo "original file"
+            echo "======================"
+            cat stepzen-admin.sh | grep openssl
+            sed -i '/openssl rand/c\random_string=$(tr -dc a-z0-9 </dev/urandom | head -c 6; echo)' stepzen-admin.sh
+
+            echo "patched file"
+            echo "======================"
+            cat stepzen-admin.sh | grep urandom
+            
+            echo "get admin key"
+            admin_key=$(./stepzen-admin.sh get-adminkey | grep graphql)
+            echo "get api key"
+            api_key=$(./stepzen-admin.sh get-apikey | grep graphql)
+
+            cluster_domain=$(oc get ingresses.config/cluster -o jsonpath={.spec.domain})
+            echo "Cluster domain is: $cluster_domain"
+
+            echo "Admin key is: $admin_key"
+            echo "Api key is: $api_key"
+            echo "Route for graphql account is: graphql.zen.$cluster_domain"
+
+            echo "create secret"
+            oc create secret -n stepzen generic stepzen-keys --from-literal admin_key="$admin_key" --from-literal api_key="$api_key" --from-literal route="graphql.zen.$cluster_domain"
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - setup-stepzen-routes          
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace   
+  workspaces:
+    - name: workspace

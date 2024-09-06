@@ -1,0 +1,33 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: stepzen-pipeline-
+  namespace: default
+  labels:
+    tekton.dev/pipeline: stepzen-pipeline
+spec:
+  pipelineRef:
+    name: stepzen-pipeline
+  taskRunTemplate:
+    serviceAccountName: pipeline
+    podTemplate:
+      securityContext:
+        fsGroup: 65532
+        seLinuxOptions:
+          level: s0:c26,c0     
+  timeouts:
+    pipeline: 8h0m0s
+  workspaces:
+    - name: workspace
+      volumeClaimTemplate:
+        metadata:
+          creationTimestamp: null
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: ocs-storagecluster-cephfs
+          volumeMode: Filesystem
+        status: {}

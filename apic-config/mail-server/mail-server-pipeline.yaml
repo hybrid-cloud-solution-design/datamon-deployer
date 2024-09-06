@@ -1,0 +1,86 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: mail-server-pipeline
+spec:
+  tasks:
+    - name: mailserver-setup
+      params:
+        - name: SCRIPT
+          value: |-
+            oc apply -f - <<EOF 
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: development-mailserver
+            EOF
+
+            echo "Create deployment"
+            oc apply -f - <<EOF 
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: maildev
+              namespace: development-mailserver
+              labels:
+                app: maildev
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: maildev
+              template:
+                metadata:
+                  labels:
+                    app: maildev
+                spec:
+                  containers:
+                  - name: maildev
+                    # Todo: Use stable
+                    image: maildev/maildev:2.1.0
+                    args: ["-s", "1025", "-w", "1080"]
+            EOF
+
+            echo "Create service"
+            oc apply -f - <<EOF 
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: mailserver
+              namespace: development-mailserver
+            spec:
+              selector:
+                app: maildev
+              ports:
+                - name: smtp
+                  protocol: TCP
+                  port: 1025
+                  targetPort: 1025
+                - name: http
+                  protocol: TCP
+                  port: 1080
+                  targetPort: 1080
+            EOF
+
+            echo "create route for UI"
+            oc apply -f - <<EOF 
+            kind: Route
+            apiVersion: route.openshift.io/v1
+            metadata:
+              name: mail-dashboard
+              namespace: development-mailserver
+            spec:
+              to:
+                kind: Service
+                name: mailserver
+                weight: 100
+              port:
+                targetPort: http
+            EOF
+
+            MAIL_ROUTE=$(oc get route mail-dashboard -n development-mailserver -o jsonpath="{.spec.host}")
+            echo "Mail dashbord: http://$MAIL_ROUTE"
+
+      taskRef:
+        kind: Task
+        name: ibm-pak

@@ -1,0 +1,350 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: openldap-pipeline
+spec:
+  params:
+    - default: openldap
+      name: openldap-namespace
+      type: string
+  tasks:
+    - name: openldap-setup
+      params:
+        - name: SCRIPT
+          value: |-
+            oc apply -f - <<EOF 
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: $(params.openldap-namespace)
+            EOF
+
+            oc apply -f - <<EOF 
+            apiVersion: v1
+            kind: PersistentVolumeClaim
+            metadata:
+              name: openldap-data
+              namespace: $(params.openldap-namespace)
+            spec:
+              accessModes:
+                - ReadWriteOnce
+              volumeMode: Filesystem
+              storageClassName: ocs-storagecluster-ceph-rbd
+              resources:
+                requests:
+                  storage: 1Gi
+            EOF
+
+            export LDAP_PWD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13; echo)
+            echo $LDAP_PWD
+            oc create secret -n $(params.openldap-namespace) generic openldap --from-literal adminpassword="$LDAP_PWD"
+
+            cat <<EOF > users.ldif
+            # acme.org
+            dn: dc=acme,dc=org
+            objectClass: dcObject
+            objectClass: organization
+            dc: acme
+            o: acme
+
+            # users, acme.org
+            dn: ou=users,dc=acme,dc=org
+            objectClass: organizationalUnit
+            ou: users
+
+            # provider-1, users, acme.org
+            dn: cn=provider-1,ou=users,dc=acme,dc=org
+            cn: provider-1
+            sn: Bar1
+            objectClass: inetOrgPerson
+            objectClass: posixAccount
+            objectClass: shadowAccount
+            userPassword:: cGFzc3cwcmQ=
+            uid: provider-1
+            uidNumber: 1000
+            gidNumber: 1000
+            homeDirectory: /home/provider-1
+
+            # provider-2, users, acme.org
+            dn: cn=provider-2,ou=users,dc=acme,dc=org
+            cn: provider-2
+            sn: Bar2
+            objectClass: inetOrgPerson
+            objectClass: posixAccount
+            objectClass: shadowAccount
+            userPassword:: cGFzc3cwcmQ=
+            uid: provider-2
+            uidNumber: 1001
+            gidNumber: 1001
+            homeDirectory: /home/provider-2
+
+            # developer-1, users, acme.org
+            dn: cn=developer-1,ou=users,dc=acme,dc=org
+            cn: developer-1
+            sn: Bar5
+            objectClass: inetOrgPerson
+            objectClass: posixAccount
+            objectClass: shadowAccount
+            userPassword:: cGFzc3cwcmQ=
+            uid: developer-1
+            uidNumber: 1004
+            gidNumber: 1004
+            homeDirectory: /home/developer-1
+            mail: developer-1@acme.org
+
+            # consumer-1, users, acme.org
+            dn: cn=consumer-1,ou=users,dc=acme,dc=org
+            cn: consumer-1
+            sn: Bar7
+            objectClass: inetOrgPerson
+            objectClass: posixAccount
+            objectClass: shadowAccount
+            userPassword:: cGFzc3cwcmQ=
+            uid: consumer-1
+            uidNumber: 1006
+            gidNumber: 1006
+            homeDirectory: /home/consumer-1
+            mail: consumer-1@consumer-org.org
+
+            # consumer-2, users, acme.org
+            dn: cn=consumer-2,ou=users,dc=acme,dc=org
+            cn: consumer-2
+            sn: Bar8
+            objectClass: inetOrgPerson
+            objectClass: posixAccount
+            objectClass: shadowAccount
+            userPassword:: cGFzc3cwcmQ=
+            uid: consumer-2
+            uidNumber: 1007
+            gidNumber: 1007
+            homeDirectory: /home/consumer-2
+            mail: consumer-2@consumer-org.org
+
+            # cpd_platform_users, users, acme.org
+            dn: cn=cpd_platform_users,ou=users,dc=acme,dc=org
+            cn: cpd_platform_users
+            objectClass: groupOfNames
+            member: cn=provider-1,ou=users,dc=acme,dc=org
+            member: cn=provider-2,ou=users,dc=acme,dc=org
+            member: cn=developer-1,ou=users,dc=acme,dc=org
+            member: cn=consumer-1,ou=users,dc=acme,dc=org
+            member: cn=consumer-2,ou=users,dc=acme,dc=org
+            EOF
+
+            oc create configmap -n $(params.openldap-namespace) ldap-users --from-file=users.ldif
+
+            echo "Create deployment"
+            oc apply -f - <<EOF 
+            kind: Deployment
+            apiVersion: apps/v1
+            metadata:
+              name: openldap-openldap-bitnami
+              namespace: $(params.openldap-namespace)
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app.kubernetes.io/instance: openldap
+                  app.kubernetes.io/name: openldap-bitnami
+              template:
+                metadata:
+                  creationTimestamp: null
+                  labels:
+                    app.kubernetes.io/instance: openldap
+                    app.kubernetes.io/name: openldap-bitnami
+                spec:
+                  volumes:
+                    - name: openldap-data
+                      persistentVolumeClaim:
+                        claimName: openldap-data
+                    - name: users-volume
+                      configMap:
+                        name: ldap-users
+                        defaultMode: 420
+                  containers:
+                    - resources: {}
+                      readinessProbe:
+                        tcpSocket:
+                          port: 1389
+                        initialDelaySeconds: 15
+                        timeoutSeconds: 1
+                        periodSeconds: 15
+                        successThreshold: 1
+                        failureThreshold: 3
+                      terminationMessagePath: /dev/termination-log
+                      name: openldap-bitnami
+                      livenessProbe:
+                        tcpSocket:
+                          port: 1389
+                        initialDelaySeconds: 15
+                        timeoutSeconds: 1
+                        periodSeconds: 15
+                        successThreshold: 1
+                        failureThreshold: 3
+                      env:
+                        - name: LDAP_SKIP_DEFAULT_TREE
+                          value: 'yes'
+                        - name: LDAP_ADMIN_PASSWORD
+                          valueFrom:
+                            secretKeyRef:
+                              name: openldap
+                              key: adminpassword              
+                        - name: LDAP_CUSTOM_LDIF_DIR
+                          value: /ldifs
+                        - name: LDAP_ROOT
+                          value: dc=acme,dc=org
+                      securityContext:
+                        capabilities:
+                          add:
+                            - NET_BIND_SERVICE
+                          drop:
+                            - ALL
+                        runAsNonRoot: true
+                        readOnlyRootFilesystem: false
+                      ports:
+                        - name: ldap-tcp
+                          containerPort: 1389
+                          protocol: TCP
+                        - name: ldap-udp
+                          containerPort: 1389
+                          protocol: UDP
+                        - name: ldaps-tcp
+                          containerPort: 1636
+                          protocol: TCP
+                        - name: ldaps-udp
+                          containerPort: 1636
+                          protocol: UDP
+                      imagePullPolicy: Always
+                      startupProbe:
+                        tcpSocket:
+                          port: 1389
+                        timeoutSeconds: 1
+                        periodSeconds: 10
+                        successThreshold: 1
+                        failureThreshold: 12
+                      volumeMounts:
+                        - name: openldap-data
+                          mountPath: /bitnami/openldap
+                        - name: users-volume              
+                          mountPath: /ldifs
+                      image: 'bitnami/openldap:2.6.6'
+            EOF
+
+            echo "Create service"
+            oc apply -f - <<EOF 
+            kind: Service
+            apiVersion: v1
+            metadata:
+              name: openldap
+              namespace: $(params.openldap-namespace)
+            spec:
+              ports:
+                - name: ldap-tcp
+                  protocol: TCP
+                  port: 389
+                  targetPort: 1389
+                - name: ldaps-tcp
+                  protocol: TCP
+                  port: 636
+                  targetPort: 1636
+              selector:
+                app.kubernetes.io/instance: openldap
+                app.kubernetes.io/name: openldap-bitnami
+            EOF
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace
+    - name: openldap-cp4d
+      params:
+        - name: SCRIPT
+          value: |-
+            export CPD_ROUTE=$(oc get route cpd -n cpd -o jsonpath="{.spec.host}")
+            export CPD_ADMIN=cpadmin
+            export CPD_ADMIN_PASSWD=$(oc extract --namespace cpd secret/platform-auth-idp-credentials --keys=admin_password --to=-)
+            export IDP_ROUTE=$(oc get routes -n cpd cp-console -o jsonpath='{.spec.host}')
+            echo "IDP Route: $IDP_ROUTE"
+            export ACCESS_TOKEN=$(curl -k -X POST -H "Content-Type: application/x-www-form-urlencoded;charset=UTF-8"  -d "grant_type=password&username=$CPD_ADMIN&password=$CPD_ADMIN_PASSWD&scope=openid" "https://$IDP_ROUTE/idprovider/v1/auth/identitytoken" | jq -r .access_token)
+            echo "ACCESS_TOKEN: $ACCESS_TOKEN"
+
+            export LDAP_PASSWD=$(oc extract --namespace openldap secret/openldap --keys=adminpassword --to=- | base64 )
+
+            # test connection - TODO - loop here
+            echo "Test connection"
+
+            i=0
+            while true
+            do
+              export TEST_RESULT=$(curl -k -X POST "https://$IDP_ROUTE/idprovider/v3/auth/idsource/ldap/validateConnection" \
+              --header 'Content-Type: application/json' \
+              --header "Authorization: Bearer $ACCESS_TOKEN" \
+              --data-raw \
+              "{ 
+                  \"name\": \"openLDAP\",
+                  \"idp_config\": {
+                      \"ldap_url\": \"ldap://openldap.openldap:389\",
+                      \"ldap_basedn\": \"dc=acme,dc=org\",
+                      \"ldap_binddn\": \"cn=admin,dc=acme,dc=org\",
+                      \"ldap_bindpassword\": \"$LDAP_PASSWD\"
+                  }
+              }" | jq .status)
+
+              echo "Current status: $TEST_RESULT"
+              # Check to see if the deployment exists and apply patch if it does
+              if [ -z "$TEST_RESULT" ] || [ $TEST_RESULT != "success" ] ; then
+                echo "[$((120 -$i))] Still waiting for openldap to be ready"
+              else
+                echo "openldap  ready"
+                break
+              fi
+
+              ((i++))
+              sleep 60
+              if [[ "$i" == '20' ]]; then
+                echo "openldap not ready within timeout limit"
+                exit 1
+              fi
+            done
+
+            curl -k -X POST "https://$IDP_ROUTE/idprovider/v3/auth/idsource/" \
+            --header 'Content-Type: application/json' \
+            --header "Authorization: Bearer $ACCESS_TOKEN" \
+            --data-raw \
+            "{
+              \"name\": \"openldap\",
+              \"description\": \"\",
+              \"protocol\": \"ldap\",
+              \"type\": \"Custom\",
+              \"idp_config\": {
+                    \"ldap_id\": \"openldap\",
+                    \"ldap_realm\": \"REALM\",
+                    \"ldap_url\": \"ldap://openldap.openldap:389\",
+                    \"ldap_basedn\": \"dc=acme,dc=org\",
+                    \"ldap_binddn\": \"cn=admin,dc=acme,dc=org\",
+                    \"ldap_bindpassword\": \"$LDAP_PASSWD\",
+                    \"ldap_type\": \"Custom\",
+                    \"ldap_ignorecase\": \"false\",
+                    \"ldap_userfilter\": \"(&(uid=%v)(objectclass=inetOrgPerson))\",
+                    \"ldap_useridmap\": \"*:uid\",
+                    \"ldap_groupfilter\": \"(&(cn=%v)(objectclass=groupOfNames))\",
+                    \"ldap_groupidmap\": \"*:cn\",
+                    \"ldap_groupmemberidmap\": \"groupOfNames:member\",
+                    \"ldap_nestedsearch\": \"false\",
+                    \"ldap_pagingsearch\": \"false\"
+                    }
+            }"
+
+
+      taskRef:
+        kind: Task
+        name: ibm-pak
+      runAfter:
+        - openldap-setup        
+      workspaces:
+        - name: manifest-dir
+          workspace: workspace
+
+  workspaces:
+    - name: workspace
